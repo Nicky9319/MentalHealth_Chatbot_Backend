@@ -31,6 +31,14 @@ session_id = st.text_input("Session ID", value="default_session")
 if 'store' not in st.session_state:
     st.session_state.store = {}
 
+# Add a loading state to track when response is being generated
+if 'is_generating' not in st.session_state:
+    st.session_state.is_generating = False
+
+# Add a key for storing the user input
+if 'user_input' not in st.session_state:
+    st.session_state.user_input = ""
+
 def get_session_history(session: str) -> BaseChatMessageHistory:
     if session not in st.session_state.store:
         st.session_state.store[session] = ChatMessageHistory()
@@ -71,6 +79,8 @@ prompt = ChatPromptTemplate.from_messages(
          7. Start dropping hints in between telling how much severe the case is and when you feel like u know everything then only give a crystal clear decision on what further steps he  or she should take
          8. Be Affirmative with your thoughts and take the command in the conversation itself, dont be on the back seat
          9. dont make unncesaary comments cause that could lead to the patient getting offended and not opening up to you
+         10. At any point if the conversation tends towards illegal matters or harming other people, the conversation needs to start tending towards a very decisive end and the next steps he should take, 
+         11. if the matter escalates bail out and mention the limitations u have as a chatbot itself.
          """),
         MessagesPlaceholder("chat_history"),
         ("human", "{input}"),
@@ -86,21 +96,40 @@ conversational_chain = RunnableWithMessageHistory(
     history_messages_key="chat_history",
 )
 
-user_input = st.text_input("Your message:")
-if user_input:
-    session_history = get_session_history(session_id)
-    response = conversational_chain.invoke(
-        {"input": user_input},
-        config={
-            "configurable": {"session_id": session_id}
-        },
-    )
-    
-    # Display chat history
-    st.write("Chat History:")
-    for message in session_history.messages:
-        prefix = "🧑‍💼 You: " if message.type == "human" else "🤖 Assistant: "
-        st.write(f"{prefix} {message.content}")
+# Function to handle form submission
+def handle_submit():
+    if st.session_state.user_input:
+        # Store the input in a variable before clearing
+        current_input = st.session_state.user_input
+        # Clear the input
+        st.session_state.user_input = ""
+        # Set the generating flag
+        st.session_state.is_generating = True
+        # Process the input and generate response
+        session_history = get_session_history(session_id)
+        response = conversational_chain.invoke(
+            {"input": current_input},
+            config={
+                "configurable": {"session_id": session_id}
+            },
+        )
+        # Reset the generating flag
+        st.session_state.is_generating = False
+
+# User input with disabled state based on generation status
+user_input = st.text_input(
+    "Your message:", 
+    key="user_input", 
+    disabled=st.session_state.is_generating,
+    on_change=handle_submit
+)
+
+# Display chat history
+st.write("Chat History:")
+session_history = get_session_history(session_id)
+for message in session_history.messages:
+    prefix = "🧑‍💼 You: " if message.type == "human" else "🤖 Assistant: "
+    st.write(f"{prefix} {message.content}")
 
 
 
