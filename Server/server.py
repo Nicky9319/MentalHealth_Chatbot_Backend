@@ -234,5 +234,35 @@ def createSessionWithId(session_id: str):
     result = createSession()
     return result
 
+@app.post("/GenerateAudioResponse")
+async def generateAudioResponse(request: Request):
+    """Saves the audio file sent by the client to the local disk"""
+    try:
+        # Parse the JSON payload
+        payload = await request.json()
+        session_id = payload.get("session_id")
+        audio_data = payload.get("audio_data")  # This should be the binary data encoded as base64
+        
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID cannot be empty")
+        if not audio_data:
+            raise HTTPException(status_code=400, detail="Audio data cannot be empty")
+        
+        # Convert base64 string to binary
+        import base64
+        audio_binary = base64.b64decode(audio_data)
+        
+        # Save the audio data to a file in the current script's directory
+        current_directory = os.path.dirname(os.path.abspath(__file__))
+        audio_file_path = os.path.join(current_directory, "audio.wav")
+        
+        with open(audio_file_path, "wb") as audio_file:
+            audio_file.write(audio_binary)
+        
+        return {"message": "Audio saved successfully", "session_id": session_id, "file_path": audio_file_path}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing audio: {str(e)}")
+
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000)
