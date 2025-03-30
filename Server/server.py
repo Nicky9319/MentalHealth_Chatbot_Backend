@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 import uvicorn
 import os
 from dotenv import load_dotenv
@@ -13,8 +13,179 @@ from langchain_core.messages import AIMessage, HumanMessage
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware  # Add this import
 
+import speech_recognition as sr
+from pathlib import Path
+import os
+from groq import Groq
+import json
+import librosa
+import numpy as np
+from dotenv import load_dotenv
+
 # Load environment variables
 load_dotenv()
+
+# Get GROQ API Key
+api_key = os.getenv("GROQ_API_KEY")
+if not api_key:
+    raise ValueError("GROQ_API_KEY not found in environment variables")
+
+class VoiceAnalyzer:
+    def __init__(self):
+        self.recognizer = sr.Recognizer()
+        self.client = Groq(api_key=api_key)  # Fixed: Use api_key directly, not os.getenv(api_key))
+
+    def extract_audio_features(self, audio_file_path):
+        """Extract audio features like pitch, volume, and speaking rate"""
+        try:
+            # Load audio file
+            y, sr = librosa.load(audio_file_path)
+            
+            # Extract features
+            # Pitch (fundamental frequency)
+            pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
+            pitch_mean = np.mean(pitches[magnitudes > np.max(magnitudes)/2])
+            
+            # Volume (RMS energy)
+            volume = np.mean(librosa.feature.rms(y=y))
+            
+            # Speaking rate (zero crossing rate)
+            speaking_rate = np.mean(librosa.feature.zero_crossing_rate(y))
+            
+            return {
+                "pitch": float(pitch_mean),
+                "volume": float(volume),
+                "speaking_rate": float(speaking_rate)
+            }
+        except Exception as e:
+            print(f"Error extracting audio features: {str(e)}")
+            return None
+
+    def analyze_emotion(self, audio_file_path):
+        """Analyze emotional factors from voice tonality and transcribed text"""
+        # Get text transcription
+        text = self.transcribe_audio(audio_file_path)
+        
+        # Extract audio features
+        audio_features = self.extract_audio_features(audio_file_path)
+        
+        if not audio_features:
+            return None
+
+        prompt = f"""
+        Analyze the following voice characteristics and text for emotional indicators:
+        
+        Text transcription: {text}
+        Voice features:
+        - Pitch: {audio_features['pitch']} (higher values indicate higher pitch)
+        - Volume: {audio_features['volume']} (higher values indicate louder speech)
+        - Speaking rate: {audio_features['speaking_rate']} (higher values indicate faster speech)
+        
+        Please provide:
+        1. Stress level (1-10)
+        2. Confidence level (1-10)
+        3. Anxiety level (1-10)
+        4. Overall mood (positive/negative/neutral)
+        5. Key emotional indicators based on both voice and text
+        
+        """
+
+        response = self.client.chat.completions.create(
+            model="Gemma2-9b-It",
+            messages=[
+                {"role": "system", "content": "You are an expert in voice emotion analysis."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        # print(response)
+        # print()
+        # print(response.choices[0].message.content)
+
+        # print(type(response.choices[0].message.content))
+
+        try:
+            emotion_data = response.choices[0].message.content
+            print(type(emotion_data))
+            # Include the transcription in the return value
+            # emotion_data["transcription"] = text
+            return emotion_data
+        except Exception as e:
+            print(e)
+            return {
+                "stress_level": 0,
+                "confidence_level": 0,
+                "anxiety_level": 0,
+                "mood": "unknown",
+                "emotional_indicators": [],
+                "transcription": text
+            }
+
+
+    
+    def transcribe_audio(self, audio_file_path):
+        """
+        Transcribes an audio file using the Groq client.
+
+        Args:
+            audio_file_path (str): Path to the audio file.
+            model (str): Model to use for transcription. Default is "whisper-large-v3-turbo".
+            prompt (str): Optional context or spelling prompt.
+            response_format (str): Format of the response. Default is "verbose_json".
+            timestamp_granularities (list): Optional list of timestamp granularities ("word", "segment", or both).
+            temperature (float): Optional temperature setting for transcription. Default is 0.0.
+
+        Returns:
+            str: Transcription text.
+        """
+        # Initialize the Groq client
+
+        model="whisper-large-v3-turbo"
+        prompt=None 
+        response_format="verbose_json" 
+        timestamp_granularities=None 
+        temperature=0.0
+
+
+        client = Groq()
+
+        # Open the audio file
+        with open(audio_file_path, "rb") as file:
+            # Create a transcription of the audio file
+            transcription = client.audio.transcriptions.create(
+                file=file,
+                model=model,
+                prompt=prompt,
+                response_format=response_format,
+                timestamp_granularities=timestamp_granularities,
+                temperature=temperature
+            )
+            # Return the transcription text
+            return transcription.text
+    
+    def process_audio(self, audio_path):
+                """Process audio file and return comprehensive analysis"""
+                if not os.path.exists(audio_path):
+                    return {"error": "Audio file not found"}
+                    
+                try:
+                    emotion_analysis = self.analyze_emotion(audio_path)
+                    audio_features = self.extract_audio_features(audio_path)
+                    transcription = self.transcribe_audio(audio_path)
+                    
+                    response = {
+                        "emotion_analysis": emotion_analysis,
+                        "audio_features": audio_features,
+                        "transcription": transcription
+                    }
+                    print("Final Analysis:", json.dumps(response, indent=2))
+                    return response
+                except Exception as e:
+                    return {"error": str(e)}
+                    
+
+# Initialize the voice analyzer
+voice_analyzer = VoiceAnalyzer()
 
 # Initialize FastAPI app
 app = FastAPI(title="Mental Health QA Chatbot API")
@@ -27,11 +198,6 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
-
-# Get GROQ API Key
-api_key = os.getenv("GROQ_API_KEY")
-if not api_key:
-    raise ValueError("GROQ_API_KEY not found in environment variables")
 
 # Initialize the LLM
 llm = ChatGroq(groq_api_key=api_key, model_name="Gemma2-9b-It")
@@ -57,6 +223,15 @@ class ChatResponse(BaseModel):
 class SessionHistory(BaseModel):
     session_id: str
     messages: List[Message]
+
+# Add new model for audio response
+class AudioResponse(BaseModel):
+    message: str
+    session_id: str
+    transcription: str
+    response: str
+    emotion_analysis: Any
+    audio_features: Dict[str, float]
 
 # Function to update global context with new information from all users
 def update_global_context(user_input: str, session_id: str) -> str:
@@ -127,6 +302,7 @@ Okay so give the response while keeping these thinsgs in mind
 9. dont make unncesaary comments cause that could lead to the patient getting offended and not opening up to you
 10. At any point if the conversation tends towards illegal matters or harming other people, the conversation needs to start tending towards a very decisive end and the next steps he should take, 
 11. if the matter escalates bail out and mention the limitations u have as a chatbot itself.
+12. No Knowledge or information or question should be asked on the procedure of how a illegal or immoral activity is done or how to do it, if the patient asks that then you need to bail out and mention that you are not allowed to do that and you are not a doctor who is giving out medical advice
 """
 
 # Function to get or create chat history
@@ -234,17 +410,78 @@ def createSessionWithId(session_id: str):
     result = createSession()
     return result
 
+# Update existing generateAudioResponse endpoint
+
+# @app.post("/GenerateAudioResponse", response_model=AudioResponse)
+# async def generateAudioResponse(request: Request):
+#     """Processes audio and generates a response based on transcription and analysis"""
+#     try:
+#         # Parse the JSON payload
+#         payload = await request.json()
+#         session_id = payload.get("session_id")
+#         audio_data = payload.get("audio_data")  # This should be the binary data encoded as base64
+        
+#         if not session_id:
+#             raise HTTPException(status_code=400, detail="Session ID cannot be empty")
+#         if not audio_data:
+#             raise HTTPException(status_code=400, detail="Audio data cannot be empty")
+        
+#         # Convert base64 string to binary
+#         import base64
+#         audio_binary = base64.b64decode(audio_data)
+        
+#         # Save the audio data to a file in the current script's directory
+#         current_directory = os.path.dirname(os.path.abspath(__file__))
+#         audio_file_path = os.path.join(current_directory, f"audio_{session_id}.wav")
+        
+#         with open(audio_file_path, "wb") as audio_file:
+#             audio_file.write(audio_binary)
+        
+#         # Process the audio file
+#         analysis_result = voice_analyzer.process_audio(audio_file_path)
+        
+#         if "error" in analysis_result:
+#             raise HTTPException(status_code=500, detail=analysis_result["error"])
+        
+#         # Extract transcription from analysis
+#         transcription = analysis_result["transcription"]
+        
+#         # Update the shared global context with the transcription
+#         updated_context = update_global_context(transcription, session_id)
+        
+#         # Generate response using the transcription as input
+#         response = conversational_chain.invoke(
+#             {
+#                 "input": transcription,
+#                 "global_context": global_context  # Use the shared global context
+#             },
+#             config={
+#                 "configurable": {"session_id": session_id}
+#             }
+#         )
+        
+#         return AudioResponse(
+#             message="Audio processed successfully",
+#             session_id=session_id,
+#             transcription=transcription,
+#             response=response.content,
+#             emotion_analysis=analysis_result["emotion_analysis"],
+#             audio_features=analysis_result["audio_features"]
+#         )
+    
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Error processing audio: {str(e)}")
+
+# Add a new endpoint to just get audio analysis without generating a response
 @app.post("/GenerateAudioResponse")
-async def generateAudioResponse(request: Request):
-    """Saves the audio file sent by the client to the local disk"""
+async def analyzeAudio(request: Request):
+    """Analyzes audio without generating a conversational response"""
     try:
         # Parse the JSON payload
         payload = await request.json()
         session_id = payload.get("session_id")
-        audio_data = payload.get("audio_data")  # This should be the binary data encoded as base64
+        audio_data = payload.get("audio_data")
         
-        if not session_id:
-            raise HTTPException(status_code=400, detail="Session ID cannot be empty")
         if not audio_data:
             raise HTTPException(status_code=400, detail="Audio data cannot be empty")
         
@@ -252,17 +489,24 @@ async def generateAudioResponse(request: Request):
         import base64
         audio_binary = base64.b64decode(audio_data)
         
-        # Save the audio data to a file in the current script's directory
+        # Save the audio data to a file
         current_directory = os.path.dirname(os.path.abspath(__file__))
-        audio_file_path = os.path.join(current_directory, "audio.wav")
+        audio_file_path = os.path.join(current_directory, f"analysis_{session_id}.wav")
         
         with open(audio_file_path, "wb") as audio_file:
             audio_file.write(audio_binary)
         
-        return {"message": "Audio saved successfully", "session_id": session_id, "file_path": audio_file_path}
+        # Process the audio file
+        analysis_result = voice_analyzer.process_audio(audio_file_path)
+        
+        if "error" in analysis_result:
+            raise HTTPException(status_code=500, detail=analysis_result["error"])
+        
+        return analysis_result
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing audio: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error analyzing audio: {str(e)}")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    # uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
