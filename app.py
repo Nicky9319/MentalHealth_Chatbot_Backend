@@ -25,7 +25,7 @@ if not api_key:
 llm = ChatGroq(groq_api_key=api_key, model_name="Gemma2-9b-It")
 
 ## chat interface
-session_id = st.text_input("Session ID", value="default_session")
+session_id = st.text_input("Session ID", value="1")
 
 ## statefully manage chat history
 if 'store' not in st.session_state:
@@ -39,10 +39,43 @@ if 'is_generating' not in st.session_state:
 if 'user_input' not in st.session_state:
     st.session_state.user_input = ""
 
+# Add global context memory storage
+if 'global_context' not in st.session_state:
+    st.session_state.global_context = ""
+
 def get_session_history(session: str) -> BaseChatMessageHistory:
     if session not in st.session_state.store:
         st.session_state.store[session] = ChatMessageHistory()
     return st.session_state.store[session]
+
+# Function to update global context with new information from user
+def update_global_context(user_input, session_id):
+    context_prompt = ChatPromptTemplate.from_messages([
+        ("system", """
+        You are analyzing a conversation with a mental health patient.
+        Extract key personal information from the user's message that might be relevant for future sessions.
+        Focus on 
+        demographic information, 
+        mental health indicators, 
+        lifestyle details, 
+        medical conditions,
+        Family Members name and their personal information
+        and other context that gives the information about the person itself in whatsoever manner possible.
+        
+         
+        If the existing context contains information, update it with any new details or correct any inconsistencies.
+        Provide a concise, well-organized summary that preserves all important information.
+        
+        Existing context:
+        {existing_context}
+        """),
+        ("human", f"New message from session {session_id}: {user_input}")
+    ])
+    
+    context_chain = context_prompt | llm
+    updated_context = context_chain.invoke({"existing_context": st.session_state.global_context}).content
+    st.session_state.global_context = updated_context
+    return updated_context
 
 # Create a simple conversational chain with the LLM
 prompt = ChatPromptTemplate.from_messages(
@@ -50,6 +83,10 @@ prompt = ChatPromptTemplate.from_messages(
         ("system", """
          You are a psychiatrist who is very kind and helpful and is able to help people out with facing mental issues. 
          There is a person who is suffering from mental illness and you need to assist him or her. 
+         
+         GLOBAL CONTEXT (Information shared across sessions):
+         {global_context}
+         
          Try finding out the following things about the patient before giving consultation:
          1. Gender 
          2. Age
@@ -105,16 +142,30 @@ def handle_submit():
         st.session_state.user_input = ""
         # Set the generating flag
         st.session_state.is_generating = True
+        
+        # Update global context with the new user message
+        update_global_context(current_input, session_id)
+        
         # Process the input and generate response
         session_history = get_session_history(session_id)
         response = conversational_chain.invoke(
-            {"input": current_input},
+            {
+                "input": current_input,
+                "global_context": st.session_state.global_context
+            },
             config={
                 "configurable": {"session_id": session_id}
             },
         )
         # Reset the generating flag
         st.session_state.is_generating = False
+
+# Add UI elements for global context
+with st.expander("Global Context (Shared Knowledge)", expanded=False):
+    st.write(st.session_state.global_context)
+    if st.button("Reset Global Context"):
+        st.session_state.global_context = ""
+        st.success("Global context has been reset.")
 
 # User input with disabled state based on generation status
 user_input = st.text_input(

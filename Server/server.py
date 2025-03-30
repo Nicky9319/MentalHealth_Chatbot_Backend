@@ -42,6 +42,9 @@ session_counter = 1
 # Store for chat histories
 chat_store: Dict[str, ChatMessageHistory] = {}
 
+# Changed from Dict to single string for global shared context
+global_context = ""
+
 # Pydantic models for request/response
 class Message(BaseModel):
     content: str
@@ -55,10 +58,45 @@ class SessionHistory(BaseModel):
     session_id: str
     messages: List[Message]
 
-# Create the system prompt template
+# Function to update global context with new information from all users
+def update_global_context(user_input: str, session_id: str) -> str:
+    global global_context
+    
+    context_prompt = ChatPromptTemplate.from_messages([
+        ("system", """
+        You are analyzing a conversation with a mental health patient.
+        Extract key personal information from the user's message that might be relevant for future sessions.
+        Focus on 
+        demographic information, 
+        mental health indicators, 
+        lifestyle details, 
+        medical conditions,
+        Family Members name and their personal information
+        and other context that gives the information about the person itself in whatsoever manner possible.
+        
+        If the existing context contains information, update it with any new details or correct any inconsistencies.
+        Provide a concise, well-organized summary that preserves all important information.
+        
+        Existing context:
+        {existing_context}
+        """),
+        ("human", f"New message from session {session_id}: {user_input}")
+    ])
+    
+    # Use the single global context variable instead of session-specific context
+    context_chain = context_prompt | llm
+    updated_context = context_chain.invoke({"existing_context": global_context}).content
+    global_context = updated_context
+    return updated_context
+
+# Create the updated system prompt template that includes global context
 SYSTEM_PROMPT = """
 You are a psychiatrist who is very kind and helpful and is able to help people out with facing mental issues. 
 There is a person who is suffering from mental illness and you need to assist him or her. 
+
+GLOBAL CONTEXT (Information shared across sessions):
+{global_context}
+
 Try finding out the following things about the patient before giving consultation:
 1. Gender 
 2. Age
@@ -97,7 +135,7 @@ def getSessionHistory(session_id: str) -> BaseChatMessageHistory:
         chat_store[session_id] = ChatMessageHistory()
     return chat_store[session_id]
 
-# Initialize conversation chain
+# Initialize conversation chain with updated prompt that includes global context
 prompt = ChatPromptTemplate.from_messages([
     ("system", SYSTEM_PROMPT),
     MessagesPlaceholder("chat_history"),
@@ -138,7 +176,7 @@ def getSessionMessageHistory(session_id: str):
 
 @app.post("/GenerateResponse", response_model=ChatResponse)
 async def generateResponse(request: Request):
-    """Generates a response for a given user message and session"""
+    """Generates a response for a given user message and session, with global context"""
 
     print("Generate Response API CALL")
 
@@ -154,9 +192,15 @@ async def generateResponse(request: Request):
     if not message:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     
-    # Generate response
+    # Update the shared global context with the new user message
+    updated_context = update_global_context(message, session_id)
+    
+    # Generate response with the shared global context included
     response = conversational_chain.invoke(
-        {"input": message},
+        {
+            "input": message,
+            "global_context": global_context  # Use the shared global context
+        },
         config={
             "configurable": {"session_id": session_id}
         }
