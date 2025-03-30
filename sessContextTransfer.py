@@ -58,7 +58,8 @@ def update_global_context(user_input, session_id):
         demographic information, 
         mental health indicators, 
         lifestyle details, 
-        medical conditions
+        medical conditions,
+        Family Members name and their personal information
         and other context that gives the information about the person itself in whatsoever manner possible.
         
          
