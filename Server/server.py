@@ -410,72 +410,10 @@ def createSessionWithId(session_id: str):
     result = createSession()
     return result
 
-# Update existing generateAudioResponse endpoint
-
-# @app.post("/GenerateAudioResponse", response_model=AudioResponse)
-# async def generateAudioResponse(request: Request):
-#     """Processes audio and generates a response based on transcription and analysis"""
-#     try:
-#         # Parse the JSON payload
-#         payload = await request.json()
-#         session_id = payload.get("session_id")
-#         audio_data = payload.get("audio_data")  # This should be the binary data encoded as base64
-        
-#         if not session_id:
-#             raise HTTPException(status_code=400, detail="Session ID cannot be empty")
-#         if not audio_data:
-#             raise HTTPException(status_code=400, detail="Audio data cannot be empty")
-        
-#         # Convert base64 string to binary
-#         import base64
-#         audio_binary = base64.b64decode(audio_data)
-        
-#         # Save the audio data to a file in the current script's directory
-#         current_directory = os.path.dirname(os.path.abspath(__file__))
-#         audio_file_path = os.path.join(current_directory, f"audio_{session_id}.wav")
-        
-#         with open(audio_file_path, "wb") as audio_file:
-#             audio_file.write(audio_binary)
-        
-#         # Process the audio file
-#         analysis_result = voice_analyzer.process_audio(audio_file_path)
-        
-#         if "error" in analysis_result:
-#             raise HTTPException(status_code=500, detail=analysis_result["error"])
-        
-#         # Extract transcription from analysis
-#         transcription = analysis_result["transcription"]
-        
-#         # Update the shared global context with the transcription
-#         updated_context = update_global_context(transcription, session_id)
-        
-#         # Generate response using the transcription as input
-#         response = conversational_chain.invoke(
-#             {
-#                 "input": transcription,
-#                 "global_context": global_context  # Use the shared global context
-#             },
-#             config={
-#                 "configurable": {"session_id": session_id}
-#             }
-#         )
-        
-#         return AudioResponse(
-#             message="Audio processed successfully",
-#             session_id=session_id,
-#             transcription=transcription,
-#             response=response.content,
-#             emotion_analysis=analysis_result["emotion_analysis"],
-#             audio_features=analysis_result["audio_features"]
-#         )
-    
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=f"Error processing audio: {str(e)}")
-
-# Add a new endpoint to just get audio analysis without generating a response
 @app.post("/GenerateAudioResponse")
 async def analyzeAudio(request: Request):
     """Analyzes audio without generating a conversational response"""
+    print("Generarting response to Audio")
     try:
         # Parse the JSON payload
         payload = await request.json()
@@ -491,18 +429,54 @@ async def analyzeAudio(request: Request):
         
         # Save the audio data to a file
         current_directory = os.path.dirname(os.path.abspath(__file__))
-        audio_file_path = os.path.join(current_directory, f"analysis_{session_id}.wav")
+        audio_file_path = os.path.join(current_directory, f"audio.wav")
         
         with open(audio_file_path, "wb") as audio_file:
             audio_file.write(audio_binary)
         
+        print()
         # Process the audio file
         analysis_result = voice_analyzer.process_audio(audio_file_path)
+
+        print(analysis_result)
         
         if "error" in analysis_result:
             raise HTTPException(status_code=500, detail=analysis_result["error"])
         
-        return analysis_result
+        # Extract the needed components from analysis_result
+        transcription = analysis_result.get("transcription", "")
+        emotion_analysis = analysis_result.get("emotion_analysis", "")
+        audio_features = analysis_result.get("audio_features", {})
+
+        print()
+        print(transcription)
+        print(emotion_analysis)
+        print(audio_features)
+        print()
+
+        # Generate a response using the transcription as input if session_id is provided
+        response_text = ""
+        if session_id:
+            # Update global context with transcription
+            update_global_context(transcription, session_id)
+            
+            # Generate response
+            response = conversational_chain.invoke(
+            {
+                "input": transcription,
+                "global_context": global_context
+            },
+            config={
+                "configurable": {"session_id": session_id}
+            }
+            )
+            # response_text = response.content
+
+        print()
+        print("---------------------")
+        print(response.content)        
+        return ChatResponse(response=response.content, session_id=session_id)
+
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error analyzing audio: {str(e)}")
