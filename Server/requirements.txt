@@ -5,3 +5,4 @@ langchain-community
 langchain-core
 langchain-groq
 python-dotenv
+elevenlabs
